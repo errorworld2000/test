@@ -1,4 +1,4 @@
-from neuronnet import NeuronNet
+from models.neuronnet import NeuronNet
 
 class TestDemo:
     def test_demo1(self):

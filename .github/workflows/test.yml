@@ -1,44 +1,33 @@
-# This is a workflow to run tests automatically on push to the main branch
-
 name: Run Tests
 
-# Controls when the workflow will run
 on:
   push:
     branches: [ main ]
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   test:
-    # The type of runner that the job will run on
     runs-on: ubuntu-latest
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      # Checks out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v4
 
-      # Set up Python environment
-      - name: Set up Python 3.x
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
+      # Set up Docker
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
-      # Install dependencies if requirements.txt exists
-      - name: Install dependencies
+      # Build Docker image
+      - name: Build Docker image🐳
         run: |
-          if [ -f "requirements.txt" ]; then
-              pip install --upgrade pip
-              pip install -r requirements.txt
-          else
-              echo "No requirements.txt file, skipping dependency installation."
-          fi
+          docker build -t my_project_image .
 
-      # Run tests
-      - name: Run tests
+      # Run Docker container and execute tests
+      - name: Run tests in Docker container🫣
         run: |
-          # Assuming you use pytest for testing
-          pytest
+          docker run --rm my_project_image pytest
           # If you have a different test command, replace pytest with that command
 
-      # Additional steps can be added here, such as code coverage reporting, artifact uploading, etc.
+      # Optional: Clean up Docker images (if desired)
+      - name: Clean up Docker images🐗
+        run: |
+          docker image prune -af
