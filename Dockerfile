@@ -31,6 +31,9 @@ RUN pip install torch torchvision torchaudio --index-url https://download.pytorc
 # 安装 JupyterLab
 RUN pip install jupyterlab
 
+# 安装 poetry
+RUN pip install poetry
+
 # 配置工作目录
 WORKDIR /workspace
 
