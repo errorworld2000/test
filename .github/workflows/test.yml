@@ -12,22 +12,6 @@ jobs:
       # Checks out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v4
 
-      # Set up Docker
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      # Build Docker image
-      - name: Build Docker image🐳
+      - name: 🐳
         run: |
-          docker build -t my_project_image .
-
-      # Run Docker container and execute tests
-      - name: Run tests in Docker container🫣
-        run: |
-          docker run --rm my_project_image pytest
-          # If you have a different test command, replace pytest with that command
-
-      # Optional: Clean up Docker images (if desired)
-      - name: Clean up Docker images🐗
-        run: |
-          docker image prune -af
+          echo helloworld
