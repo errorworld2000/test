@@ -28,12 +28,12 @@ jobs:
           docker buildx build \
             --cache-from type=local,src=/tmp/.buildx-cache \
             --cache-to type=local,dest=/tmp/.buildx-cache \
-            --tag my_project_image \
+            --tag test \
             --load .
 
       - name: Run tests in Docker container🫣
         run: |
-          docker run --rm my_project_image pytest
+          docker run --rm test pytest
 
       - name: Clean up Docker images🐗
         if: always()
