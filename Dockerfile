@@ -11,7 +11,7 @@ RUN git clone https://github.com/errorworld2000/test.git /workspace
 WORKDIR /workspace
 
 # 安装项目依赖
-RUN poetry install --no-root
+RUN poetry config virtualenvs.create false && poetry install --no-root
 
 # 暴露 JupyterLab 端口
 EXPOSE 8888

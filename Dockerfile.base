@@ -1,5 +1,3 @@
-# 基础镜像 Dockerfile: Dockerfile.base
-
 # 使用基础镜像
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
@@ -18,21 +16,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg-dev \
     libpng-dev \
     software-properties-common \
-    python3-pip \
-    python3-dev \
-    python3-setuptools \
-    python3-venv \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y python3.12 python3.12-venv python3.12-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Python 3.12
+RUN add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y python3.12 python3.12-venv python3.12-dev \
+    && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.12 /usr/bin/python \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 \
+    && ln -sf /usr/local/bin/pip3.12 /usr/bin/pip3 \
+    && ln -sf /usr/local/bin/pip3.12 /usr/bin/pip \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 PyTorch 和 torchvision
 RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
-# 安装 JupyterLab
-RUN pip install jupyterlab
+# 安装 JupyterLab 和 Poetry
+RUN pip install jupyterlab poetry
 
-# 安装 poetry
-RUN pip install poetry
-
+# 配置工作目录
+WORKDIR /workspace
