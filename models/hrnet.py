@@ -1,36 +1,32 @@
-import torch.nn as nn
-import logging
-from torch.hub import load_state_dict_from_url
-from yacs.config import CfgNode as CN
+from ast import List
 import os
-# import torch.utils.model_zoo as model_zoo
+import logging
+from dataclasses import dataclass
+from typing import Optional,Dict,Type,List
+import click
+from numpy import block
+from omegaconf import DictConfig, OmegaConf
+from rich import print
+
+
+import torch.nn as nn
+from torch.hub import load_state_dict_from_url
+
+CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../config/model")
 
 logger=logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 __all__=['hrnet18', 'hrnet32', 'hrnet48']
-BN_MOMENTUM=0.1
-ALIGN_CORNERS=True
-RELU_INPLACE=True
-
-class HRNet(nn.Module):
-    def __init__(self):
-        super(HRNet, self).__init__()
-        
-      
-downsample=nn.Sequential(
-    nn.Conv2d(64,256,kernel_size=1,stride=1,bias=False),
-    nn.BatchNorm2d(256,momentum=BN_MOMENTUM)
-)
 
 class BasicBlock(nn.Module):
-    def __init__(self,input_channels,output_channels,stride=1,downsample=None):
+    def __init__(self,input_channels,output_channels,stride=1,downsample=None,momentum=0.1,relu_inplace=True):
         super(BasicBlock, self).__init__()
         self.conv1=nn.Conv2d(input_channels,output_channels,kernel_size=3,stride=stride,padding=1,bias=False)
-        self.bn1=nn.BatchNorm2d(output_channels,momentum=BN_MOMENTUM)
-        self.relu=nn.ReLU(inplace=RELU_INPLACE)
+        self.bn1=nn.BatchNorm2d(output_channels,momentum=momentum)
+        self.relu=nn.ReLU(inplace=relu_inplace)
         self.conv2=nn.Conv2d(output_channels,output_channels,kernel_size=3,stride=1,padding=1,bias=False)
-        self.bn2=nn.BatchNorm2d(output_channels,momentum=BN_MOMENTUM)
+        self.bn2=nn.BatchNorm2d(output_channels,momentum=momentum)
         self.downsample=downsample
         self.stride=stride
     
@@ -49,15 +45,15 @@ class BasicBlock(nn.Module):
 
 class Bottleneck(nn.Module):
     expansion =4
-    def __init__(self,input_channels,output_channels,stride=1,downsample=None):
+    def __init__(self,input_channels,output_channels,stride=1,downsample=None,momentum=0.1,relu_inplace=True):
         super(Bottleneck, self).__init__()
         self.conv1=nn.Conv2d(input_channels,output_channels,kernel_size=1,bias=False)
-        self.bn1=nn.BatchNorm2d(output_channels,momentum=BN_MOMENTUM)
+        self.bn1=nn.BatchNorm2d(output_channels,momentum=momentum)
         self.conv2=nn.Conv2d(output_channels,output_channels,kernel_size=3,stride=stride,padding=1,bias=False)
-        self.bn2=nn.BatchNorm2d(output_channels,momentum=BN_MOMENTUM)
+        self.bn2=nn.BatchNorm2d(output_channels,momentum=momentum)
         self.conv3=nn.Conv2d(output_channels,output_channels*self.expansion,kernel_size=1,bias=False)
-        self.bn3=nn.BatchNorm2d(output_channels*self.expansion,momentum=BN_MOMENTUM)
-        self.relu=nn.ReLU(inplace=RELU_INPLACE)
+        self.bn3=nn.BatchNorm2d(output_channels*self.expansion,momentum=momentum)
+        self.relu=nn.ReLU(inplace=relu_inplace)
         self.downsample=downsample
         self.stride=stride
         
@@ -78,35 +74,26 @@ class Bottleneck(nn.Module):
         return output
 
 class HighResolutionModule(nn.Module):
-    """_summary_
-    Constructs a HighResolutionModule which is typically part of a high-resolution network.
-    Args:
-        nn.Module (class): pytorch base class which use to construct the module.
-    """    
-    def __init__(self,num_branches,blocks,num_blocks,input_channels,output_channels,fuse_method,multi_scale_output=True, upsample_mode='bilinear'):
-        """_summary_
-        初始化函数，用于构建HighResolutionModule模块。
-        Args:
-            num_branches (int): 分支数量，用于确定模块内部的分支结构。
-            blocks (class): 每个分支中的块类型，用于构建每个分支的具体结构。
-            num_blocks (list of int): 一个列表，表示每个分支中的块数量。
-            input_channels (list of int): 一个列表，表示每个分支的输入通道数。
-            output_channels (list of int): 一个列表，表示每个分支的输出通道数。
-            fuse_method (str): 融合方法，用于确定如何融合不同分支的信息。
-            multi_scale_output (bool, optional): 是否使用多尺度输出，默认为True。
-            upsample_mode (str, optional): 上采样模式，默认为'bilinear'（双线性插值）。
-        """        
-        super(HighResolutionModule, self).__init__()
-        self._check_branches(num_branches=num_branches,num_blocks=num_blocks,input_channels=input_channels,output_channels=output_channels)
-        self.num_branches=num_branches
-        self.input_channels=input_channels
-        self.output_channels=output_channels
-        self.fuse_method=fuse_method
-        self.multi_scale_output=multi_scale_output
-        self.upsample_mode=upsample_mode
-        self.branches=self._make_branches(num_branches,blocks,num_blocks)
-        self.fuse_layers=self._make_fuse_layers()
-        self.relu=nn.ReLU(inplace=True)
+    num_branches: int
+    blocks: Type[nn.Module]
+    num_blocks: List[int]
+    input_channels: List[int]
+    output_channels: List[int]
+    fuse_method: str
+    multi_scale_output: bool = True
+    upsample_mode: str = 'bilinear'
+    branches: List[nn.Module] = field(init=False)
+    fuse_layers: List[nn.Module] = field(init=False)
+    relu: nn.Module = field(init=False)
+
+    def __post_init__(self):
+        """
+        Post-initialization to set up the internal components of the module.
+        """
+        self._check_branches()
+        self.branches = self._make_branches()
+        self.fuse_layers = self._make_fuse_layers()
+        self.relu = nn.ReLU(inplace=True)
         
     def _check_branches(self,num_branches,num_blocks,input_channels,output_channels):
         if num_branches!=len(num_blocks):
@@ -194,60 +181,60 @@ class HighResolutionModule(nn.Module):
             x_fuse.append(self.relu(y))
         return x_fuse
 
+@dataclass
 class HighResolutionNet(nn.Module):
-    def __init__(self,config,**kwargs):
-        global ALIGN_CORNERS
-        # extra=config.MODEL.EXTRA
+    def __init__(self,cfg:OmegaConf,**kwargs:dict):
         super(HighResolutionNet,self).__init__()
+        self.cfg=cfg
+        self.momentum=cfg.BASE.BN_MOMENTUM
+        self.relu_inplace=cfg.BASE.RELU_INPLACE
+
+        required_keys = ['LAYER1', 'STAGE2', 'STAGE3', 'STAGE4']
+        if not all(key in cfg for key in required_keys):
+            raise ValueError("Configuration must contain 'LAYER1', 'STAGE2', 'STAGE3', and 'STAGE4' fields.")
+        self.stage1=self._make_layer(cfg.LAYER1)
+        self.stage2=self._make_stage(cfg.STAGE2)
+        self.stage3=self._make_stage(cfg.STAGE3)
+        self.stage4=self._make_stage(cfg.STAGE4)
         
-        ALIGN_CORNERS=config.MODEL.ALIGN_CORNERS
-        
-        self.layer1_cfg = config.LAYER1
-        self.stage1=self._make_layer(self.layer1_cfg)
-        self.stage2_cfg = config.STAGE2
-        self.stage2=self._make_stage(self.stage2_cfg)
-        self.stage3_cfg = config.STAGE3
-        self.stage3=self._make_stage(self.stage3_cfg)
-        self.stage4_cfg = config.STAGE4
-        self.stage4=self._make_stage(self.stage4_cfg,False)
-        
-    def _make_layer(self,layer_config):
+    def _make_layer(self,layer_cfg:OmegaConf):
         downsample = nn.Sequential(
             nn.Conv2d(64, 256, kernel_size=1, stride=1, bias=False),
-            nn.BatchNorm2d(256, momentum=BN_MOMENTUM)
+            nn.BatchNorm2d(256, momentum=self.momentum),
         )
         layer=nn.Sequential(
             nn.Conv2d(3,64,kernel_size=3,stride=2,padding=1,bias=False),
-            nn.BatchNorm2d(64,momentum=BN_MOMENTUM),
+            nn.BatchNorm2d(64,momentum=self.momentum),
             nn.Conv2d(64,64,kernel_size=3,stride=2,padding=1,bias=False),
-            nn.BatchNorm2d(64,momentum=BN_MOMENTUM),
-            nn.ReLU(inplace=RELU_INPLACE),
-            Bottleneck(64,256,stride=1,downsample=downsample),
-            Bottleneck(256,256,stride=1),
-            Bottleneck(256,256,stride=1),
-            Bottleneck(256,256,stride=1)
+            nn.BatchNorm2d(64,momentum=self.momentum),
+            nn.ReLU(inplace=self.relu_inplace),
+            Bottleneck(64,256,stride=1,momentum=self.momentum,relu_inplace=self.relu_inplace,downsample=downsample),
+            Bottleneck(256,256,stride=1,momentum=self.momentum,relu_inplace=self.relu_inplace),
+            Bottleneck(256,256,stride=1,momentum=self.momentum,relu_inplace=self.relu_inplace),
+            Bottleneck(256,256,stride=1,momentum=self.momentum,relu_inplace=self.relu_inplace)
         )
         layer1=nn.Sequential(
             layer,
-            nn.Conv2d(256,layer_config['TRANS_CHANNELS'][0],kernel_size=1,bias=False)
+            nn.Conv2d(256,layer_cfg['TRANS_CHANNELS'][0],kernel_size=1,bias=False)
         )
         layer2=nn.Sequential(
             layer,
-            nn.Conv2d(256,layer_config['TRANS_CHANNELS'][1],kernel_size=1,bias=False)
+            nn.Conv2d(256,layer_cfg.TRANS_CHANNELS[1],kernel_size=1,bias=False)
         )
         return nn.ModuleList([layer1,layer2])
           
-    def _make_stage(self,stage_config,multi_scale_output=True):
-        num_modules = stage_config['NUM_MODULES']
-        block = stage_config['BLOCK']
-        num_blocks = stage_config['NUM_BLOCKS']
-        num_branches = stage_config['NUM_BRANCHES']
-        input_channels = stage_config['INPUT_CHANNELS']
-        output_channels = stage_config['OUTPUT_CHANNELS']
-        fuse_method = stage_config['FUSE_METHOD']
+    def _make_stage(self,stage_cfg:OmegaConf):
+        num_modules = stage_cfg['NUM_MODULES']
+        block = stage_cfg['BLOCK']
+        num_blocks = stage_cfg['NUM_BLOCKS']
+        num_branches = stage_cfg['NUM_BRANCHES']
+        input_channels = stage_cfg['INPUT_CHANNELS']
+        output_channels = stage_cfg['OUTPUT_CHANNELS']
+        fuse_method = stage_cfg['FUSE_METHOD']
+        multi_scale_output=stage_cfg['MULTI_SCALE_OUTPUT']
         
         modules=[]
-        for i in range(num_modules-1):
+        for _ in range(num_modules-1):
             modules.append(
                 HighResolutionModule(num_branches=num_branches,blocks=block,num_blocks=num_blocks,input_channels=input_channels,output_channels=input_channels,fuse_method=fuse_method,multi_scale_output=False)
             )
@@ -263,33 +250,51 @@ class HighResolutionNet(nn.Module):
         x=self.stage4(x)
         return x
 
-model_urls = {
-    'hrnet18_imagenet': 'https://opr0mq.dm.files.1drv.com/y4mIoWpP2n-LUohHHANpC0jrOixm1FZgO2OsUtP2DwIozH5RsoYVyv_De5wDgR6XuQmirMV3C0AljLeB-zQXevfLlnQpcNeJlT9Q8LwNYDwh3TsECkMTWXCUn3vDGJWpCxQcQWKONr5VQWO1hLEKPeJbbSZ6tgbWwJHgHF7592HY7ilmGe39o5BhHz7P9QqMYLBts6V7QGoaKrr0PL3wvvR4w',
-    'hrnet32_imagenet': 'https://opr74a.dm.files.1drv.com/y4mKOuRSNGQQlp6wm_a9bF-UEQwp6a10xFCLhm4bqjDu6aSNW9yhDRM7qyx0vK0WTh42gEaniUVm3h7pg0H-W0yJff5qQtoAX7Zze4vOsqjoIthp-FW3nlfMD0-gcJi8IiVrMWqVOw2N3MbCud6uQQrTaEAvAdNjtjMpym1JghN-F060rSQKmgtq5R-wJe185IyW4-_c5_ItbhYpCyLxdqdEQ',
-    'hrnet48_imagenet': 'https://optgaw.dm.files.1drv.com/y4mWNpya38VArcDInoPaL7GfPMgcop92G6YRkabO1QTSWkCbo7djk8BFZ6LK_KHHIYE8wqeSAChU58NVFOZEvqFaoz392OgcyBrq_f8XGkusQep_oQsuQ7DPQCUrdLwyze_NlsyDGWot0L9agkQ-M_SfNr10ETlCF5R7BdKDZdupmcMXZc-IE3Ysw1bVHdOH4l-XEbEKFAi6ivPUbeqlYkRMQ',
-    'hrnet48_cityscapes': 'https://optgaw.dm.files.1drv.com/y4mWNpya38VArcDInoPaL7GfPMgcop92G6YRkabO1QTSWkCbo7djk8BFZ6LK_KHHIYE8wqeSAChU58NVFOZEvqFaoz392OgcyBrq_f8XGkusQep_oQsuQ7DPQCUrdLwyze_NlsyDGWot0L9agkQ-M_SfNr10ETlCF5R7BdKDZdupmcMXZc-IE3Ysw1bVHdOH4l-XEbEKFAi6ivPUbeqlYkRMQ',
-    'hrnet48_ocr_cityscapes': 'https://optgaw.dm.files.1drv.com/y4mWNpya38VArcDInoPaL7GfPMgcop92G6YRkabO1QTSWkCbo7djk8BFZ6LK_KHHIYE8wqeSAChU58NVFOZEvqFaoz392OgcyBrq_f8XGkusQep_oQsuQ7DPQCUrdLwyze_NlsyDGWot0L9agkQ-M_SfNr10ETlCF5R7BdKDZdupmcMXZc-IE3Ysw1bVHdOH4l-XEbEKFAi6ivPUbeqlYkRMQ'
-}
-
-
-def _hrnet(arch,pretrained, progress,**kwargs):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.abspath(os.path.join(script_dir, "../config/hrnet_config.yaml"))
-    cfg=CN()
-    cfg.merge_from_file(config_path)
-    model = HighResolutionNet(cfg.arch,**kwargs)
-    if pretrained:
-        model_url=model_urls[arch]
-        # state_dict = model_zoo.load_url(model_url,progress=progress)
-        state_dict = load_state_dict_from_url(model_url,progress=progress)
-        model.load_state_dict(state_dict, strict=False)
-    return model
+def _hrnet(cfg_path: str, pretrained: bool, **kwargs: dict):
+    # 加载配置文件
+    try:
+        cfg = OmegaConf.load(cfg_path)
+        logger.info(f"Configuration loaded from: {cfg_path}")
+    except Exception as e:
+        logger.error(f"Error loading configuration file '{cfg_path}': {e}")
+        return None
     
-def hrnet18(pretrained=True,process=True,**kwargs):
-    return _hrnet('hrnet18',pretrained,process,**kwargs)
+    # 创建模型实例
+    try:
+        model = HighResolutionNet(cfg, **kwargs)
+        logger.info(f"Model instance created: {model.__class__.__name__}")
+    except Exception as e:
+        logger.error(f"Error creating model instance: {e}")
+        return None
+    
+    # 加载预训练权重
+    if pretrained:
+        try:
+            model_url = cfg.model_url
+            logger.info(f"Loading pretrained weights from: {model_url}")
+            state_dict = load_state_dict_from_url(model_url)
+            model.load_state_dict(state_dict, strict=False)
+            logger.info("Pretrained weights loaded successfully.")
+        except Exception as e:
+            logger.error(f"Error loading pretrained weights from '{model_url}': {e}")
+            return None
+    
+    return model
 
-def hrnet32(pretrained=True,process=True,**kwargs):
-    return _hrnet('hrnet32',pretrained,process,**kwargs)
+def hrnet18(pretrained: bool = True, **kwargs: dict):
+    # 构建配置文件路径
+    config_path = os.path.join(CONFIG_DIR, "hrnet18_config.yaml")
+    logger.info(f"Using configuration file: {config_path}")
+    return _hrnet(config_path, pretrained, **kwargs)
 
-def hrnet48(pretrained=True,process=True,**kwargs):
-    return _hrnet('hrnet48',pretrained,process,**kwargs)
+def hrnet32(pretrained: bool = True, **kwargs: dict):
+    # 构建配置文件路径
+    config_path = os.path.join(CONFIG_DIR, "hrnet32_config.yaml")
+    logger.info(f"Using configuration file: {config_path}")
+    return _hrnet(config_path, pretrained, **kwargs)
+
+def hrnet48(pretrained: bool = True, **kwargs: dict):
+    # 构建配置文件路径
+    config_path = os.path.join(CONFIG_DIR, "hrnet48_config.yaml")
+    logger.info(f"Using configuration file: {config_path}")
+    return _hrnet(config_path, pretrained, **kwargs)
