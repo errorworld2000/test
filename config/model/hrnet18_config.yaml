@@ -1,6 +1,6 @@
 defaults:
   - hrnet_base_config.yaml
-
+_base_: hrnet_base_config.yaml
 
 LAYER1:
   TRANS_CHANNELS: [18, 36]

@@ -1,7 +1,7 @@
 from ast import List
 import os
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass,field
 from typing import Optional,Dict,Type,List
 import click
 from numpy import block
@@ -90,7 +90,7 @@ class HighResolutionModule(nn.Module):
         """
         Post-initialization to set up the internal components of the module.
         """
-        self._check_branches()
+        self._check_branches(num_branches=num_branches,num_blocks=)
         self.branches = self._make_branches()
         self.fuse_layers = self._make_fuse_layers()
         self.relu = nn.ReLU(inplace=True)
@@ -231,7 +231,7 @@ class HighResolutionNet(nn.Module):
         input_channels = stage_cfg['INPUT_CHANNELS']
         output_channels = stage_cfg['OUTPUT_CHANNELS']
         fuse_method = stage_cfg['FUSE_METHOD']
-        multi_scale_output=stage_cfg['MULTI_SCALE_OUTPUT']
+        multi_scale_output=stage_cfg.get('MULTI_SCALE_OUTPUT', False)
         
         modules=[]
         for _ in range(num_modules-1):
@@ -253,7 +253,9 @@ class HighResolutionNet(nn.Module):
 def _hrnet(cfg_path: str, pretrained: bool, **kwargs: dict):
     # 加载配置文件
     try:
-        cfg = OmegaConf.load(cfg_path)
+        cfg1=OmegaConf.load(os.path.join(CONFIG_DIR, "hrnet_base_config.yaml"))
+        cfg2 = OmegaConf.load(cfg_path)
+        cfg=OmegaConf.merge(cfg1,cfg2)
         logger.info(f"Configuration loaded from: {cfg_path}")
     except Exception as e:
         logger.error(f"Error loading configuration file '{cfg_path}': {e}")
