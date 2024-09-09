@@ -82,16 +82,16 @@ class HighResolutionModule(nn.Module):
     fuse_method: str
     multi_scale_output: bool = True
     upsample_mode: str = 'bilinear'
-    branches: List[nn.Module] = field(init=False)
-    fuse_layers: List[nn.Module] = field(init=False)
+    branches: nn.ModuleList
+    fuse_layers: List[nn.ModuleList] = field(init=False)
     relu: nn.Module = field(init=False)
 
     def __post_init__(self):
         """
         Post-initialization to set up the internal components of the module.
         """
-        self._check_branches(num_branches=num_branches,num_blocks=)
-        self.branches = self._make_branches()
+        self._check_branches(self.num_branches,self.num_blocks,self.input_channels,self.output_channels)
+        self.branches = self._make_branches(self.num_branches,self.block,self.num_blocks)
         self.fuse_layers = self._make_fuse_layers()
         self.relu = nn.ReLU(inplace=True)
         
