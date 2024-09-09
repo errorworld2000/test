@@ -90,8 +90,8 @@ class HighResolutionModule(nn.Module):
         """
         Post-initialization to set up the internal components of the module.
         """
-        self._check_branches(num_branches=num_branches,num_blocks=)
-        self.branches = self._make_branches()
+        self._check_branches(num_branches,num_blocks,input_channels,output_channels)
+        self.branches = self._make_branches(num_branches,block,num_blocks)
         self.fuse_layers = self._make_fuse_layers()
         self.relu = nn.ReLU(inplace=True)
         
