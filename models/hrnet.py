@@ -9,6 +9,7 @@ from omegaconf import DictConfig, OmegaConf
 from rich import print
 
 
+from sympy import false
 import torch.nn as nn
 from torch.hub import load_state_dict_from_url
 
@@ -73,6 +74,12 @@ class Bottleneck(nn.Module):
         output=self.relu(output)
         return output
 
+blocks_dict = {
+    'BASIC': BasicBlock,
+    'BOTTLENECK': Bottleneck,
+}
+
+@dataclass
 class HighResolutionModule(nn.Module):
     num_branches: int
     blocks: Type[nn.Module]
@@ -82,16 +89,17 @@ class HighResolutionModule(nn.Module):
     fuse_method: str
     multi_scale_output: bool = True
     upsample_mode: str = 'bilinear'
-    branches: nn.ModuleList
+    momentum: float=0.1
+    relu_inplace: bool=False
+    align_corners: bool=False
+    branches: nn.ModuleList=field(init=False)
     fuse_layers: List[nn.ModuleList] = field(init=False)
     relu: nn.Module = field(init=False)
 
     def __post_init__(self):
-        """
-        Post-initialization to set up the internal components of the module.
-        """
+        super(HighResolutionModule,self).__init__()
         self._check_branches(self.num_branches,self.num_blocks,self.input_channels,self.output_channels)
-        self.branches = self._make_branches(self.num_branches,self.block,self.num_blocks)
+        self.branches = self._make_branches(self.num_branches,self.blocks,self.num_blocks)
         self.fuse_layers = self._make_fuse_layers()
         self.relu = nn.ReLU(inplace=True)
         
@@ -114,12 +122,12 @@ class HighResolutionModule(nn.Module):
         if stride!=1 or self.input_channels[branch_index]!=self.output_channels[branch_index]:
             downsample=nn.Sequential(
                 nn.Conv2d(self.input_channels[branch_index],self.output_channels[branch_index],kernel_size=1,stride=stride,bias=False),
-                nn.BatchNorm2d(self.output_channels[branch_index],momentum=BN_MOMENTUM)
+                nn.BatchNorm2d(self.output_channels[branch_index],momentum=self.momentum)
             )
         layers=[]
         layers.append(block(self.input_channels[branch_index],self.output_channels[branch_index],stride,downsample))
         # self.input_channels[branch_index]=self.output_channels[branch_index]
-        for i in range(1,len(num_blocks)):
+        for i in range(1,num_blocks[branch_index]):
             layers.append(block(self.output_channels[branch_index],self.output_channels[branch_index]))
         return nn.Sequential(*layers)
         
@@ -140,8 +148,8 @@ class HighResolutionModule(nn.Module):
                     # TODO: upsample place in forward
                     fuse_layer.append(nn.Sequential(
                         nn.Conv2d(self.output_channels[j],self.output_channels[i],1,1,0,bias=False),
-                        nn.BatchNorm2d(self.output_channels[j],momentum=BN_MOMENTUM),
-                        nn.Upsample(scale_factor=2**(j-i),mode=self.upsample_mode,align_corners=ALIGN_CORNERS)
+                        nn.BatchNorm2d(self.output_channels[j],momentum=self.momentum),
+                        nn.Upsample(scale_factor=2**(j-i),mode=self.upsample_mode,align_corners=self.align_corners)
                         )
                     )
                 if j==i:
@@ -152,13 +160,13 @@ class HighResolutionModule(nn.Module):
                         if k==i-j-1:
                             conv3x3s.append(nn.Sequential(
                                 nn.Conv2d(self.output_channels[i-1],self.output_channels[i],3,2,1,bias=False),
-                                nn.BatchNorm2d(self.output_channels[i],momentum=BN_MOMENTUM),
+                                nn.BatchNorm2d(self.output_channels[i],momentum=self.momentum),
                             ))
                         else:
                             conv3x3s.append(nn.Sequential(
                                 nn.Conv2d(self.output_channels[k+j],self.output_channels[k+j+1],3,2,1,bias=False),
-                                nn.BatchNorm2d(self.output_channels[k+j+1],momentum=BN_MOMENTUM),
-                                nn.ReLU(inplace=RELU_INPLACE)
+                                nn.BatchNorm2d(self.output_channels[k+j+1],momentum=self.momentum),
+                                nn.ReLU(inplace=self.relu_inplace)
                             ))
                     fuse_layer.append(nn.Sequential(*conv3x3s))
             fuse_layers.append(nn.ModuleList(fuse_layer))
@@ -181,13 +189,14 @@ class HighResolutionModule(nn.Module):
             x_fuse.append(self.relu(y))
         return x_fuse
 
-@dataclass
+# @dataclass
 class HighResolutionNet(nn.Module):
     def __init__(self,cfg:OmegaConf,**kwargs:dict):
         super(HighResolutionNet,self).__init__()
         self.cfg=cfg
         self.momentum=cfg.BASE.BN_MOMENTUM
         self.relu_inplace=cfg.BASE.RELU_INPLACE
+        self.align_corners=cfg.BASE.ALIGN_CORNERS
 
         required_keys = ['LAYER1', 'STAGE2', 'STAGE3', 'STAGE4']
         if not all(key in cfg for key in required_keys):
@@ -225,7 +234,7 @@ class HighResolutionNet(nn.Module):
           
     def _make_stage(self,stage_cfg:OmegaConf):
         num_modules = stage_cfg['NUM_MODULES']
-        block = stage_cfg['BLOCK']
+        block = blocks_dict[stage_cfg['BLOCK']]
         num_blocks = stage_cfg['NUM_BLOCKS']
         num_branches = stage_cfg['NUM_BRANCHES']
         input_channels = stage_cfg['INPUT_CHANNELS']
@@ -236,10 +245,10 @@ class HighResolutionNet(nn.Module):
         modules=[]
         for _ in range(num_modules-1):
             modules.append(
-                HighResolutionModule(num_branches=num_branches,blocks=block,num_blocks=num_blocks,input_channels=input_channels,output_channels=input_channels,fuse_method=fuse_method,multi_scale_output=False)
+                HighResolutionModule(num_branches=num_branches,blocks=block,num_blocks=num_blocks,input_channels=input_channels,output_channels=input_channels,fuse_method=fuse_method,multi_scale_output=False,momentum=self.momentum,relu_inplace=self.relu_inplace,align_corners=self.align_corners)
             )
         modules.append(
-                HighResolutionModule(num_branches=num_branches,blocks=block,num_blocks=num_blocks,input_channels=input_channels,output_channels=output_channels,fuse_method=fuse_method,multi_scale_output=multi_scale_output)
+                HighResolutionModule(num_branches=num_branches,blocks=block,num_blocks=num_blocks,input_channels=input_channels,output_channels=output_channels,fuse_method=fuse_method,multi_scale_output=multi_scale_output,momentum=self.momentum,relu_inplace=self.relu_inplace,align_corners=self.align_corners)
             )
         return nn.Sequential(*modules)
             
